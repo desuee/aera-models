@@ -1,0 +1,68 @@
+# AERA – fetches the language models for the offline "AI understanding" and puts them into a release of this repository.
+# Start it under "Actions" → "Fetch AERA language models" → "Run workflow". It runs on GitHub's servers, nothing on your PC.
+name: Fetch AERA language models
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release name
+        default: llm-v1
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Tools (llama.cpp for the check and for splitting files over 2 GB)
+        run: |
+          pip install huggingface_hub
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp llama.cpp
+          cmake -S llama.cpp -B llama.cpp/build -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF
+          cmake --build llama.cpp/build -j 4 --config Release --target llama-cli llama-gguf-split llama-simple
+          ls llama.cpp/build/bin
+      - name: Download (Apache-2.0 models only, 4-bit Q4_K_M)
+        run: |
+          mkdir -p out
+          cat > get.py <<'PY'
+          import sys, shutil
+          from huggingface_hub import HfApi, hf_hub_download
+          api = HfApi()
+          for repo, name in [('Qwen/Qwen2.5-1.5B-Instruct-GGUF', 'qwen2.5-1.5b-instruct-q4_k_m.gguf'),
+                             ('unsloth/Qwen3-1.7B-GGUF', 'qwen3-1.7b-q4_k_m.gguf'),
+                             ('unsloth/Qwen3-4B-Instruct-2507-GGUF', 'qwen3-4b-instruct-2507-q4_k_m.gguf')]:
+              files = [f for f in api.list_repo_files(repo) if f.lower().endswith('.gguf') and 'q4_k_m' in f.lower() and '/' not in f]
+              print(repo, files)
+              if not files:
+                  sys.exit('no Q4_K_M file in ' + repo)
+              p = hf_hub_download(repo, files[0], local_dir='dl')
+              shutil.move(p, 'out/' + name)
+          PY
+          python get.py
+          ls -la out
+      - name: Check that each model loads and answers
+        run: |
+          for f in out/*.gguf; do
+            echo "== $f"
+            llama.cpp/build/bin/llama-simple -m "$f" -n 16 "The capital of Germany is" 2>/dev/null | tail -2
+          done
+      - name: Split files over 1.9 GB (GitHub release limit 2 GB; llama.cpp loads the parts automatically)
+        run: |
+          for f in out/*.gguf; do
+            s=$(stat -c %s "$f")
+            if [ "$s" -gt 1990000000 ]; then
+              llama.cpp/build/bin/llama-gguf-split --split --split-max-size 1900M "$f" "${f%.gguf}"
+              rm "$f"
+            fi
+          done
+          sha256sum out/*.gguf | tee out/SHA256SUMS.txt
+          ls -la out
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ inputs.tag }}" out/*.gguf out/SHA256SUMS.txt --title "AERA language models ${{ inputs.tag }}" --notes "Offline AI understanding of radio transmissions. Qwen2.5-1.5B-Instruct (Qwen, Apache-2.0), Qwen3-1.7B and Qwen3-4B-Instruct-2507 (Qwen, Apache-2.0; GGUF quantization by unsloth), Q4_K_M."
