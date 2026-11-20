@@ -26,24 +26,22 @@ jobs:
           cmake --build llama.cpp/build -j 4 --config Release --target llama-cli llama-gguf-split llama-simple
           ls llama.cpp/build/bin
       - name: Download (Apache-2.0 models only, 4-bit Q4_K_M)
+        shell: python
         run: |
-          mkdir -p out
-          cat > get.py <<'PY'
-          import sys, shutil
+          import os, sys, shutil
           from huggingface_hub import HfApi, hf_hub_download
+          os.makedirs('out', exist_ok=True)
           api = HfApi()
           for repo, name in [('Qwen/Qwen2.5-1.5B-Instruct-GGUF', 'qwen2.5-1.5b-instruct-q4_k_m.gguf'),
                              ('unsloth/Qwen3-1.7B-GGUF', 'qwen3-1.7b-q4_k_m.gguf'),
                              ('unsloth/Qwen3-4B-Instruct-2507-GGUF', 'qwen3-4b-instruct-2507-q4_k_m.gguf')]:
               files = [f for f in api.list_repo_files(repo) if f.lower().endswith('.gguf') and 'q4_k_m' in f.lower() and '/' not in f]
-              print(repo, files)
+              print(repo, files, flush=True)
               if not files:
                   sys.exit('no Q4_K_M file in ' + repo)
               p = hf_hub_download(repo, files[0], local_dir='dl')
               shutil.move(p, 'out/' + name)
-          PY
-          python get.py
-          ls -la out
+          print(os.listdir('out'))
       - name: Check that each model loads and answers
         run: |
           for f in out/*.gguf; do
