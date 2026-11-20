@@ -1,0 +1,56 @@
+# AERA – builds the speech recognition models for the game and puts them into a release of this repository.
+# Start it under "Actions" → "Build AERA speech models" → "Run workflow". It runs on GitHub's servers, nothing on your PC.
+name: Build AERA speech models
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release name
+        default: atc-v1
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy huggingface_hub transformers
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          git clone --depth 1 https://github.com/openai/whisper openai-whisper
+          git clone --depth 1 --branch v1.7.6 https://github.com/ggml-org/whisper.cpp whisper.cpp
+          cmake -S whisper.cpp -B whisper.cpp/build -DCMAKE_BUILD_TYPE=Release -DWHISPER_BUILD_TESTS=OFF
+          cmake --build whisper.cpp/build -j 4 --config Release
+          ls whisper.cpp/build/bin
+      - name: ATC model (Whisper medium.en fine-tuned on ATC radio)
+        run: |
+          mkdir -p out
+          python -c "from huggingface_hub import snapshot_download; snapshot_download('jacktol/whisper-medium.en-fine-tuned-for-ATC', local_dir='hf-atc')"
+          python whisper.cpp/models/convert-h5-to-ggml.py hf-atc openai-whisper out
+          mv out/ggml-model.bin out/ggml-atc-medium.en-f16.bin
+          $(ls whisper.cpp/build/bin/*quantize* | head -1) out/ggml-atc-medium.en-f16.bin out/ggml-atc-medium.en-q5_0.bin q5_0
+          rm -rf hf-atc
+      - name: Reference models for the comparison (same as in the game, plus plain medium.en)
+        run: |
+          for f in ggml-base.en.bin ggml-small.en.bin ggml-medium.en-q5_0.bin; do
+            curl -L --fail -o out/$f https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$f
+          done
+      - name: Check that the models load and transcribe
+        run: |
+          for f in out/ggml-atc-medium.en-q5_0.bin out/ggml-base.en.bin; do
+            echo "== $f"; $(ls whisper.cpp/build/bin/whisper-cli whisper.cpp/build/bin/main 2>/dev/null | head -1) -m $f -f whisper.cpp/samples/jfk.wav -nt -l en -t 4
+          done
+          sha256sum out/*.bin | tee out/SHA256SUMS.txt
+          ls -la out
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rm -f out/ggml-atc-medium.en-f16.bin
+          gh release create "${{ inputs.tag }}" out/*.bin out/SHA256SUMS.txt --title "AERA speech models ${{ inputs.tag }}" --notes "ATC: jacktol/whisper-medium.en-fine-tuned-for-ATC (MIT), converted with whisper.cpp v1.7.6 and quantized to q5_0. References: ggerganov/whisper.cpp base.en, small.en, medium.en-q5_0 (MIT)."
