@@ -1,0 +1,36 @@
+# AERA – fetches the official llama.cpp Windows programs (processor + Vulkan graphics card) for the offline AI understanding
+# and puts them into a release of this repository. Start it under "Actions" → "Fetch llama.cpp for Windows" → "Run workflow".
+name: Fetch llama.cpp for Windows
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release name
+        default: llama-win-v1
+permissions:
+  contents: write
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download the latest official Windows builds (MIT licence)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p out
+          TAG=$(gh release view --repo ggml-org/llama.cpp --json tagName -q .tagName)
+          echo "llama.cpp $TAG"
+          gh release download "$TAG" --repo ggml-org/llama.cpp --dir out --pattern '*bin-win-cpu-x64.zip' --pattern '*bin-win-vulkan-x64.zip'
+          cd out
+          for f in *.zip; do echo "== $f"; unzip -l "$f" | tail -n +4 | head -60; done
+          mv *bin-win-cpu-x64.zip llama-win-cpu-x64.zip
+          mv *bin-win-vulkan-x64.zip llama-win-vulkan-x64.zip
+          echo "$TAG" > LLAMA_VERSION.txt
+          sha256sum *.zip | tee SHA256SUMS.txt
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ inputs.tag }}" out/*.zip out/LLAMA_VERSION.txt out/SHA256SUMS.txt --title "llama.cpp for AERA ${{ inputs.tag }}" --notes "Official Windows builds of llama.cpp (ggml-org, MIT licence), version in LLAMA_VERSION.txt."
