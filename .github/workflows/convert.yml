@@ -43,8 +43,9 @@ jobs:
           done
       - name: Check that the models load and transcribe
         run: |
+          ls -la out
           for f in out/ggml-atc-medium.en-q5_0.bin out/ggml-base.en.bin; do
-            echo "== $f"; $(ls whisper.cpp/build/bin/whisper-cli whisper.cpp/build/bin/main 2>/dev/null | head -1) -m $f -f whisper.cpp/samples/jfk.wav -nt -l en -t 4
+            echo "== $f"; whisper.cpp/build/bin/whisper-cli -m $f -f whisper.cpp/samples/jfk.wav -nt -l en -t 4
           done
           sha256sum out/*.bin | tee out/SHA256SUMS.txt
           ls -la out
